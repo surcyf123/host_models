@@ -77,4 +77,5 @@ def generate_text():
     return jsonify({'response': text,"model":model_name_or_path})
 
 if __name__ == '__main__':
-    app.run(debug=False, port=local_port)
+    app.run(debug=False, host="0.0.0.0", port=local_port)
+    

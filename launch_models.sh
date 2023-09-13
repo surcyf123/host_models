@@ -4,7 +4,7 @@
 models=("Huginn-13B-v4-GPTQ" "Huginn-v3-13B-GPTQ" "Huginn-13B-v4.5-GPTQ" "LoKuS-13B-GPTQ")  # Add more models as required
 
 # List of ports
-ports=(60113 60180 60151 60181)  # Add more ports as required
+ports=(30000 30001 30002 30003)  # Add more ports as required
 
 # Ensure that the number of models and ports are the same
 if [[ ${#models[@]} -ne ${#ports[@]} ]]; then
