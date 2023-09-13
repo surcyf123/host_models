@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # List of model strings
-models=("Huginn-13B-v4-GPTQ" "Huginn-v3-13B-GPTQ" "Huginn-13B-v4.5-GPTQ" "LoKuS-13B-GPTQ")  # Add more models as required
+models=("Luban-13B-GPTQ" "Mythical-Destroyer-V2-L2-13B-GPTQ" "Speechless-Llama2-13B-GPTQ" "Stheno-Inverted-L2-13B-GPTQ")  # Add more models as required
 
 # List of ports
 ports=(30000 30001 30002 30003)  # Add more ports as required

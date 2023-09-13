@@ -38,43 +38,58 @@ model = AutoModelForCausalLM.from_pretrained(model_name_or_path,
                                            trust_remote_code=True,
                                            device_map=f"cuda:{gpuid}")
 
-def generate_output(text,max_new_tokens,temperature,top_p,top_k,repetition_penalty,stop_tokens):
+def generate_output(text: str, num_responses: int, max_new_tokens, temperature, top_p, top_k, repetition_penalty, stop_tokens):
+    # Convert the text to input_ids
     input_ids = tokenizer(text, return_tensors="pt").input_ids.to(f"cuda:{gpuid}")
+    
+    # Use num_return_sequences to generate multiple completions in parallel
     tokens = model.generate(
         inputs=input_ids,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
-        top_p = top_p,
-        top_k = top_k,
-        repetition_penalty = repetition_penalty,
+        top_p=top_p,
+        top_k=top_k,
+        repetition_penalty=repetition_penalty,
         stopping_criteria=convert_stopwords_to_ids(stop_tokens),
-        do_sample=True)
-    return tokenizer.decode(tokens[0], skip_special_tokens=True)
+        do_sample=True,
+        num_return_sequences=num_responses
+    )
+    
+    # Decode each item in the batch
+    return [tokenizer.decode(token, skip_special_tokens=True) for token in tokens]
+
+
 
 app = Flask(__name__)
 import re
 
 @app.route('/generate', methods=['POST'])
 def generate_text():
-    data=request.json
-    # Get the hyperparameters and prompt from request
-    text = generate_output(
+    data = request.json
+    num_responses = 3  # Number of varied responses for each prompt
+    
+    # Generate multiple outputs for the prompt
+    responses = generate_output(
         data['prompt'],
+        num_responses,
         200,
-        0.7,
+        0.9,
         1.0,
-        30,
+        60,
         1.0,
-        [])
-
-    pruned_prompt = re.sub('<\|.*?\|>', '', data['prompt'])
-    text = text.replace(pruned_prompt, "")
-
-    # Remove StopToken from the Generation
-    for stop in data.get('stopwords', []):
-        text = text.replace(stop, "")
-
-    return jsonify({'response': text,"model":model_name_or_path})
+        []
+    )
+    
+    # Clean up the responses
+    for i, response in enumerate(responses):
+        pruned_prompt = re.sub('<\|.*?\|>', '', data['prompt'])
+        responses[i] = response.replace(pruned_prompt, "")
+        
+        # Remove StopToken from the Generation
+        for stop in data.get('stopwords', []):
+            responses[i] = responses[i].replace(stop, "")
+    
+    return jsonify({'response': responses, "model": model_name_or_path})
 
 if __name__ == '__main__':
     app.run(debug=False, host="0.0.0.0", port=local_port)
