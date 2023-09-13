@@ -1,96 +1,41 @@
-import sys
-model_name_or_path = sys.argv[1]
-local_port = sys.argv[2]
-gpuid = str(sys.argv[3])
-
+import sys, re
 from flask import Flask, request, jsonify
-
-import accelerate
-import torch
+from auto_gptq import exllama_set_max_input_length
 from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 from typing import List
+import torch
 
-tokenizer = AutoTokenizer.from_pretrained(model_name_or_path,
-                                          use_fast=False,
-                                          local_files_only=True,
-                                          trust_remote_code=True)
+model_name_or_path, local_port, gpuid = sys.argv[1], sys.argv[2], str(sys.argv[3])
+tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, use_fast=False, local_files_only=True, trust_remote_code=True)
+
 class StoppingCriteriaSub(StoppingCriteria):
-    def __init__(self, stops = []):
+    def __init__(self, stops=[]):
         super().__init__()
-        self.stops = [stop.to("cuda:{gpuid}") for stop in stops]
-
+        self.stops = [stop.to(f"cuda:{gpuid}") for stop in stops]
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        for stop in self.stops:
-            if torch.all((stop == input_ids[0][-len(stop):])).item():
-                return True
-        return False
+        return any(torch.all((stop == input_ids[0][-len(stop):])).item() for stop in self.stops)
 
+def convert_stopwords_to_ids(stopwords: List[str]):
+    return StoppingCriteriaList([StoppingCriteriaSub([tokenizer(stop_word, return_tensors='pt')['input_ids'].squeeze() for stop_word in stopwords])])
 
-def convert_stopwords_to_ids(stopwords : List[str]):
-    stop_words_ids = [tokenizer(stop_word, return_tensors='pt')['input_ids'].squeeze() for stop_word in stopwords]
-    stopping_criteria = StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
-    return stopping_criteria
+model = AutoModelForCausalLM.from_pretrained(model_name_or_path, local_files_only=True, torch_dtype=torch.float16, trust_remote_code=True, device_map=f"cuda:{gpuid}")
 
+if 'Speechless-Llama2-13B-GPTQ' in model_name_or_path:
+    model = exllama_set_max_input_length(model, 4096)
 
-model = AutoModelForCausalLM.from_pretrained(model_name_or_path,
-                                            local_files_only=True,
-                                           torch_dtype=torch.float16,
-                                           trust_remote_code=True,
-                                           device_map=f"cuda:{gpuid}")
-
-def generate_output(text: str, num_responses: int, max_new_tokens, temperature, top_p, top_k, repetition_penalty, stop_tokens):
-    # Convert the text to input_ids
-    input_ids = tokenizer(text, return_tensors="pt").input_ids.to(f"cuda:{gpuid}")
-    
-    # Use num_return_sequences to generate multiple completions in parallel
-    tokens = model.generate(
-        inputs=input_ids,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        repetition_penalty=repetition_penalty,
-        stopping_criteria=convert_stopwords_to_ids(stop_tokens),
-        do_sample=True,
-        num_return_sequences=num_responses
-    )
-    
-    # Decode each item in the batch
+def generate_output(text, num_responses, max_new_tokens, temperature, top_p, top_k, repetition_penalty, stop_tokens):
+    tokens = model.generate(tokenizer(text, return_tensors="pt").input_ids.to(f"cuda:{gpuid}"), max_new_tokens=max_new_tokens, temperature=temperature, top_p=top_p, top_k=top_k, repetition_penalty=repetition_penalty, stopping_criteria=convert_stopwords_to_ids(stop_tokens), do_sample=True, num_return_sequences=num_responses)
     return [tokenizer.decode(token, skip_special_tokens=True) for token in tokens]
 
-
-
 app = Flask(__name__)
-import re
 
 @app.route('/generate', methods=['POST'])
 def generate_text():
-    data = request.json
-    num_responses = 3  # Number of varied responses for each prompt
-    
-    # Generate multiple outputs for the prompt
-    responses = generate_output(
-        data['prompt'],
-        num_responses,
-        200,
-        0.9,
-        1.0,
-        60,
-        1.0,
-        []
-    )
-    
-    # Clean up the responses
-    for i, response in enumerate(responses):
-        pruned_prompt = re.sub('<\|.*?\|>', '', data['prompt'])
-        responses[i] = response.replace(pruned_prompt, "")
-        
-        # Remove StopToken from the Generation
-        for stop in data.get('stopwords', []):
-            responses[i] = responses[i].replace(stop, "")
-    
+    data, num_responses = request.json, 3
+    responses = [response.replace(re.sub('<\|.*?\|>', '', data['prompt']), "") for response in generate_output(data['prompt'], num_responses, 200, 0.9, 1.0, 60, 1.0, [])]
+    for i, stop in enumerate(data.get('stopwords', [])):
+        responses[i] = responses[i].replace(stop, "")
     return jsonify({'response': responses, "model": model_name_or_path})
 
 if __name__ == '__main__':
     app.run(debug=False, host="0.0.0.0", port=local_port)
-    
